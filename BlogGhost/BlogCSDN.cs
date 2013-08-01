@@ -5,6 +5,9 @@ using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading.Tasks;
 using System.Net.Http;
+using System.Net;
+using System.IO;
+using System.Diagnostics;
 
 namespace BlogGhost
 {
@@ -31,7 +34,7 @@ namespace BlogGhost
 
         private bool CheckHistory(BlogIndexItem item)
         {
-            return true;
+            return false;
         }
 
         private void CheckItem()
@@ -57,35 +60,85 @@ namespace BlogGhost
             string content = indexTask.Result;
             Match artical = regContent.Match(content);
             string result = artical.Groups[1].Value;
-            
-            List<string> articalList = new List<string>();
 
-            Dictionary<int,int> markList = new Dictionary<int,int> ();
+            List<ContentSem> markList = new List<ContentSem>();
             
             MatchCollection mc = regImage.Matches(result);
             foreach (Match imgItem in mc)
             {
-                markList.Add(imgItem.Groups[1].Index, imgItem.Groups[1].Length);
+                ContentSem cs = new ContentSem("img", imgItem.Groups[1].Index, imgItem.Groups[1].Length, imgItem.Groups[1].Value);
+                markList.Add(cs);
             }
 
             mc = regCode.Matches(result);
             foreach (Match codeItem in mc)
             {
-                markList.Add(-1 * codeItem.Groups[0].Index, codeItem.Groups[0].Length);
+                ContentSem cs = new ContentSem("code", codeItem.Groups[0].Index, codeItem.Groups[0].Length, codeItem.Groups[0].Value);
+                markList.Add(cs);
             }
 
-            markList.OrderBy(c => c.Key);
+            markList.OrderBy(c => c.Index);
 
+            foreach (ContentSem semItem in markList)
+            {
+                if (semItem.Type == "img")
+                {
+
+                }
+            }
             //articalList.Add(result.Substring(
             //start task to process img and code.
         }
 
-        private void processImage()
+        private void ExecuteCmd(string command)
         {
- 
+            Process p = new Process();
+            p.StartInfo.FileName = "cmd.exe";
+
+            p.StartInfo.UseShellExecute = false;
+            p.StartInfo.RedirectStandardInput = true;
+            p.StartInfo.RedirectStandardOutput = true;
+            p.StartInfo.CreateNoWindow = true;
+
+            p.Start();
+            p.StandardInput.WriteLine(command);
+
+            p.StandardInput.WriteLine("exit");
+            p.WaitForExit();
+            p.Close();
+        }
+        private void processImage(ContentSem sem)
+        {
+            string filename = string.Empty;
+
+            if (sem.Content.Contains("?"))
+            {
+                sem.Content = sem.Content.Split('?')[0];
+            }
+
+            int fileNameIndex = sem.Content.Split('/').Length;
+            filename = sem.Content.Split('/')[fileNameIndex - 1];
+            if (sem.Content.Split('/')[0] == "http://img.blog.csdn.net/")
+            {
+                filename = sem.Content.Split('/')[1] + ".jpg";
+            }
+            WebRequest wr = WebRequest.Create(sem.Content);
+            WebResponse response = wr.GetResponse();
+            Stream responseStream = response.GetResponseStream();
+            FileStream writer = new FileStream(filename, FileMode.OpenOrCreate, FileAccess.Write);
+            byte[] buffer = new byte[1024];
+            int count = 0;
+            while ((count = responseStream.Read(buffer, 0, buffer.Length)) > 0)
+            {
+                writer.Write(buffer, 0, count);
+            }
+            writer.Close();
+            responseStream.Close();
+
+            //netdisk /e "upload E:\Pictures\psb.jpg \app\PublicFiles"
         }
 
-        private void processCode()
+        private void processCode(ContentSem sem)
         {
  
         }
