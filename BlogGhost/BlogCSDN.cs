@@ -8,6 +8,7 @@ using System.Net.Http;
 using System.Net;
 using System.IO;
 using System.Diagnostics;
+using System.Threading;
 
 namespace BlogGhost
 {
@@ -28,7 +29,7 @@ namespace BlogGhost
             MatchCollection mc = regIndex.Matches(content);
             foreach (Match item in mc)
             {
-                indexQueue.Enqueue(new BlogIndexItem(item.Groups[1].Value, item.Groups[2].Value));
+                indexQueue.Enqueue(new BlogIndexItem(item.Groups[2].Value, item.Groups[1].Value));
             }
         }
 
@@ -48,16 +49,15 @@ namespace BlogGhost
                 BlogIndexItem indexItem = indexQueue.Dequeue();
                 if (!CheckHistory(indexItem))
                 {
-                    //Start a new task to process it.
+                    Task.Factory.StartNew(() => processContent(indexItem));
                 }
             }
         }
 
-        private void processContent(BlogIndexItem item)
+        private async void processContent(BlogIndexItem item)
         {
             HttpClient client = new HttpClient();
-            Task<string> indexTask = client.GetStringAsync(item.URL);
-            string content = indexTask.Result;
+            string content = await client.GetStringAsync(item.URL);
             Match artical = regContent.Match(content);
             string result = artical.Groups[1].Value;
 
@@ -79,15 +79,20 @@ namespace BlogGhost
 
             markList.OrderBy(c => c.Index);
 
+            Queue<Task> taskList = new Queue<Task>();
+
             foreach (ContentSem semItem in markList)
             {
                 if (semItem.Type == "img")
                 {
-
+                    taskList.Enqueue(Task.Factory.StartNew(() => processImage(semItem)));
+                }
+                if (semItem.Type == "code")
+                {
+                    taskList.Enqueue(Task.Factory.StartNew(() => processCode(semItem)));
                 }
             }
-            //articalList.Add(result.Substring(
-            //start task to process img and code.
+            await Task.Factory.ContinueWhenAll(taskList.ToArray(), completedTasks => { Console.WriteLine("Done"); });
         }
 
         private void ExecuteCmd(string command)
@@ -109,6 +114,7 @@ namespace BlogGhost
         }
         private void processImage(ContentSem sem)
         {
+            string uploadImgCMDPattern = "netdisk /e \"upload {0} \\app\\PublicFiles\\img-51make\\{1}\\{2}\"";
             string filename = string.Empty;
 
             if (sem.Content.Contains("?"))
@@ -125,6 +131,8 @@ namespace BlogGhost
             WebRequest wr = WebRequest.Create(sem.Content);
             WebResponse response = wr.GetResponse();
             Stream responseStream = response.GetResponseStream();
+
+            Console.WriteLine("Will Save File : {0}", filename);
             FileStream writer = new FileStream(filename, FileMode.OpenOrCreate, FileAccess.Write);
             byte[] buffer = new byte[1024];
             int count = 0;
@@ -135,12 +143,16 @@ namespace BlogGhost
             writer.Close();
             responseStream.Close();
 
-            //netdisk /e "upload E:\Pictures\psb.jpg \app\PublicFiles"
+            string cmd = string.Format(uploadImgCMDPattern, filename, DateTime.Now.Year, DateTime.Now.Month);
+            Console.WriteLine("Will execute command : {0}",cmd);
+            ExecuteCmd(cmd);
         }
 
         private void processCode(ContentSem sem)
         {
- 
+            Match code = regCode.Match(sem.Content);
+            string codePatern = "[{0}]{1}[/{2}]";
+            sem.Content = string.Format(codePatern, code.Groups[1].Value, code.Groups[2].Value, code.Groups[1].Value);
         }
 
         public string GetContent(string url)
@@ -150,7 +162,9 @@ namespace BlogGhost
 
         public void Next(int index)
         {
-            this.GetList(string.Format(baseUrl, index));
+            Task.Factory.StartNew(() => CheckItem());
+            Task.Factory.StartNew(()=>GetList(string.Format(baseUrl, index)));
+            Console.WriteLine("Get next {0} done.",index);
         }
    } 
 }
