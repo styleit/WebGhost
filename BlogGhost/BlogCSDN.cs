@@ -82,6 +82,7 @@ namespace BlogGhost
                 indexQueue.Enqueue(new BlogIndexItem(item.Groups[2].Value, item.Groups[1].Value));
             }
             CheckItem();
+
             Console.WriteLine("GetList done in fun.");
         }
 
@@ -93,15 +94,22 @@ namespace BlogGhost
         private void CheckItem()
         {
             Console.WriteLine("CheckItem start in fun.");
-            Queue<Task> queue = new Queue<Task>();
-            BlogIndexItem indexItem = indexQueue.Dequeue();
-            if (!CheckHistory(indexItem))
-            {
-                queue.Enqueue(Task.Factory.StartNew(() => processContent(indexItem)));
-            }
+            Task checkItemTask = new Task(() => {
+                Queue<Task> queue = new Queue<Task>();
+                for (int i = 0; i < indexQueue.Count; i++)
+                {
+                    BlogIndexItem indexItem = indexQueue.Dequeue();
+                    if (!CheckHistory(indexItem))
+                    {
+                        queue.Enqueue(Task.Factory.StartNew(() => processContent(indexItem), TaskCreationOptions.AttachedToParent));
+                    }
+                }
+                Task.Factory.ContinueWhenAll(queue.ToArray(), task => { Console.WriteLine("All CheckItem Done"); });
+            });
 
-            Task.Factory.ContinueWhenAll(queue.ToArray(), task => { Console.WriteLine("All CheckItem Done"); });
-            Console.WriteLine("CheckItem done in fun.");
+            checkItemTask.ContinueWith(task => { Console.WriteLine("CheckItem done in fun."); });
+            checkItemTask.Start();
+            
         }
 
         private void processContent(BlogIndexItem item)
@@ -116,8 +124,11 @@ namespace BlogGhost
             MatchCollection mc = regImage.Matches(result);
             foreach (Match imgItem in mc)
             {
-                ContentSem cs = new ContentSem("img", imgItem.Groups[1].Index, imgItem.Groups[1].Length, imgItem.Groups[1].Value);
-                markList.Add(cs);
+                if (imgItem.Groups[1].Value.StartsWith("http:"))
+                {
+                    ContentSem cs = new ContentSem("img", imgItem.Groups[1].Index, imgItem.Groups[1].Length, imgItem.Groups[1].Value);
+                    markList.Add(cs);
+                }
             }
 
             mc = regCode.Matches(result);
@@ -131,20 +142,17 @@ namespace BlogGhost
             {
                 markList.OrderBy(c => c.Index);
 
-                Queue<Task> taskList = new Queue<Task>();
-
                 foreach (ContentSem semItem in markList)
                 {
                     if (semItem.Type == "img")
                     {
-                        taskList.Enqueue(Task.Factory.StartNew(() => processImage(semItem)));
+                       processImage(semItem);
                     }
                     if (semItem.Type == "code")
                     {
-                        taskList.Enqueue(Task.Factory.StartNew(() => processCode(semItem)));
+                        processCode(semItem);
                     }
                 }
-                Task.Factory.ContinueWhenAll(taskList.ToArray(), completedTasks => { Console.WriteLine("Processing {0} Done.", item.Title); });
             }
 
             Console.WriteLine("Processing {0} Done.", item.URL);
@@ -182,7 +190,9 @@ namespace BlogGhost
             //if (sem.Content.Split('/')[0] == "http://img.blog.csdn.net/")
             if (sem.Content.StartsWith("http://img.blog.csdn.net/"))
             {
-                filename = sem.Content.Split('/')[1] + ".jpg";
+                fileNameIndex = sem.Content.Split('/').Length;
+                filename = sem.Content.Split('/')[fileNameIndex - 1];
+                filename = filename + ".jpg";
             }
             WebRequest wr = WebRequest.Create(sem.Content);
             WebResponse response = wr.GetResponse();
@@ -223,9 +233,8 @@ namespace BlogGhost
 
         public void Next(int index)
         {
-            Queue<Task> queue = new Queue<Task>();
-            queue.Enqueue(Task.Factory.StartNew(()=>GetList(string.Format(baseUrl, index))));
-            Task.Factory.ContinueWhenAll(queue.ToArray(), task => { Console.WriteLine("Next {0} Done",index); });
+            GetList(string.Format(baseUrl, index));
+            Console.WriteLine("Done in Next");
         }
    } 
 }
