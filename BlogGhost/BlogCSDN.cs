@@ -21,16 +21,68 @@ namespace BlogGhost
         private Regex regCode = new Regex ("<pre name=\"code\" class=\"(.*?)\">([\\d\\D]*?)</pre>");
         private Queue<BlogIndexItem> indexQueue = new Queue<BlogIndexItem>();
 
+        /*
+        private async Task<string> GetURLContentsAsync(string url)
+        {
+            // The downloaded resource ends up in the variable named content.
+            string content = string.Empty;
+
+            // Initialize an HttpWebRequest for the current URL.
+            var webReq = (HttpWebRequest)WebRequest.Create(url);
+
+            // Send the request to the Internet resource and wait for
+            // the response.
+            Task<WebResponse> responseTask = webReq.GetResponseAsync();
+
+            using (WebResponse response = await responseTask)
+            {
+                // Get the data stream that is associated with the specified URL.
+                using (Stream responseStream = response.GetResponseStream())
+                {
+                    StreamReader reader = new StreamReader(responseStream);
+                    content = await reader.ReadToEndAsync();
+                }
+            }
+            // Return the result as a byte array.
+            return content;
+        }
+        */
+
+        private string GetURLContentsAsync(string url)
+        {
+            // The downloaded resource ends up in the variable named content.
+            string content = string.Empty;
+
+            // Initialize an HttpWebRequest for the current URL.
+            var webReq = (HttpWebRequest)WebRequest.Create(url);
+
+            // Send the request to the Internet resource and wait for
+            // the response.
+            using (WebResponse response = webReq.GetResponse())
+            {
+                // Get the data stream that is associated with the specified URL.
+                using (Stream responseStream = response.GetResponseStream())
+                {
+                    StreamReader reader = new StreamReader(responseStream);
+                    content = reader.ReadToEnd();
+                }
+            }
+            // Return the result as a byte array.
+            return content;
+        }
+
+
         private void GetList(string url)
         {
-            HttpClient client = new HttpClient();
-            Task<string> indexTask = client.GetStringAsync(url);
-            string content = indexTask.Result;
+            string content = GetURLContentsAsync(url);
             MatchCollection mc = regIndex.Matches(content);
             foreach (Match item in mc)
             {
+                Console.WriteLine("Enqueue one item.");
                 indexQueue.Enqueue(new BlogIndexItem(item.Groups[2].Value, item.Groups[1].Value));
             }
+            CheckItem();
+            Console.WriteLine("GetList done in fun.");
         }
 
         private bool CheckHistory(BlogIndexItem item)
@@ -40,24 +92,22 @@ namespace BlogGhost
 
         private void CheckItem()
         {
-            while (true)
+            Console.WriteLine("CheckItem start in fun.");
+            Queue<Task> queue = new Queue<Task>();
+            BlogIndexItem indexItem = indexQueue.Dequeue();
+            if (!CheckHistory(indexItem))
             {
-                while (indexQueue.Count == 0)
-                {
-                    ;
-                }
-                BlogIndexItem indexItem = indexQueue.Dequeue();
-                if (!CheckHistory(indexItem))
-                {
-                    Task.Factory.StartNew(() => processContent(indexItem));
-                }
+                queue.Enqueue(Task.Factory.StartNew(() => processContent(indexItem)));
             }
+
+            Task.Factory.ContinueWhenAll(queue.ToArray(), task => { Console.WriteLine("All CheckItem Done"); });
+            Console.WriteLine("CheckItem done in fun.");
         }
 
-        private async void processContent(BlogIndexItem item)
+        private void processContent(BlogIndexItem item)
         {
-            HttpClient client = new HttpClient();
-            string content = await client.GetStringAsync(item.URL);
+            Console.WriteLine("Start to processing {0}.", item.URL);
+            string content = GetURLContentsAsync(item.URL);
             Match artical = regContent.Match(content);
             string result = artical.Groups[1].Value;
 
@@ -77,22 +127,27 @@ namespace BlogGhost
                 markList.Add(cs);
             }
 
-            markList.OrderBy(c => c.Index);
-
-            Queue<Task> taskList = new Queue<Task>();
-
-            foreach (ContentSem semItem in markList)
+            if (markList.Count > 0)
             {
-                if (semItem.Type == "img")
+                markList.OrderBy(c => c.Index);
+
+                Queue<Task> taskList = new Queue<Task>();
+
+                foreach (ContentSem semItem in markList)
                 {
-                    taskList.Enqueue(Task.Factory.StartNew(() => processImage(semItem)));
+                    if (semItem.Type == "img")
+                    {
+                        taskList.Enqueue(Task.Factory.StartNew(() => processImage(semItem)));
+                    }
+                    if (semItem.Type == "code")
+                    {
+                        taskList.Enqueue(Task.Factory.StartNew(() => processCode(semItem)));
+                    }
                 }
-                if (semItem.Type == "code")
-                {
-                    taskList.Enqueue(Task.Factory.StartNew(() => processCode(semItem)));
-                }
+                Task.Factory.ContinueWhenAll(taskList.ToArray(), completedTasks => { Console.WriteLine("Processing {0} Done.", item.Title); });
             }
-            await Task.Factory.ContinueWhenAll(taskList.ToArray(), completedTasks => { Console.WriteLine("Done"); });
+
+            Console.WriteLine("Processing {0} Done.", item.URL);
         }
 
         private void ExecuteCmd(string command)
@@ -117,14 +172,15 @@ namespace BlogGhost
             string uploadImgCMDPattern = "netdisk /e \"upload {0} \\app\\PublicFiles\\img-51make\\{1}\\{2}\"";
             string filename = string.Empty;
 
-            if (sem.Content.Contains("?"))
+            if (sem.Content.Contains("?") && sem.Content.StartsWith("http://img.blog.csdn.net/"))
             {
                 sem.Content = sem.Content.Split('?')[0];
             }
 
             int fileNameIndex = sem.Content.Split('/').Length;
             filename = sem.Content.Split('/')[fileNameIndex - 1];
-            if (sem.Content.Split('/')[0] == "http://img.blog.csdn.net/")
+            //if (sem.Content.Split('/')[0] == "http://img.blog.csdn.net/")
+            if (sem.Content.StartsWith("http://img.blog.csdn.net/"))
             {
                 filename = sem.Content.Split('/')[1] + ".jpg";
             }
@@ -132,20 +188,25 @@ namespace BlogGhost
             WebResponse response = wr.GetResponse();
             Stream responseStream = response.GetResponseStream();
 
-            Console.WriteLine("Will Save File : {0}", filename);
-            FileStream writer = new FileStream(filename, FileMode.OpenOrCreate, FileAccess.Write);
-            byte[] buffer = new byte[1024];
-            int count = 0;
-            while ((count = responseStream.Read(buffer, 0, buffer.Length)) > 0)
+            if (File.Exists(filename))
+            { }
+            else
             {
-                writer.Write(buffer, 0, count);
-            }
-            writer.Close();
-            responseStream.Close();
+                Console.WriteLine("Will Save File : {0}", filename);
+                FileStream writer = new FileStream(filename, FileMode.OpenOrCreate, FileAccess.Write);
+                byte[] buffer = new byte[1024];
+                int count = 0;
+                while ((count = responseStream.Read(buffer, 0, buffer.Length)) > 0)
+                {
+                    writer.Write(buffer, 0, count);
+                }
+                writer.Close();
+                responseStream.Close();
 
-            string cmd = string.Format(uploadImgCMDPattern, filename, DateTime.Now.Year, DateTime.Now.Month);
-            Console.WriteLine("Will execute command : {0}",cmd);
-            ExecuteCmd(cmd);
+                string cmd = string.Format(uploadImgCMDPattern, filename, DateTime.Now.Year, DateTime.Now.Month);
+                Console.WriteLine("Will execute command : {0}", cmd);
+                ExecuteCmd(cmd);
+            }
         }
 
         private void processCode(ContentSem sem)
@@ -162,9 +223,9 @@ namespace BlogGhost
 
         public void Next(int index)
         {
-            Task.Factory.StartNew(() => CheckItem());
-            Task.Factory.StartNew(()=>GetList(string.Format(baseUrl, index)));
-            Console.WriteLine("Get next {0} done.",index);
+            Queue<Task> queue = new Queue<Task>();
+            queue.Enqueue(Task.Factory.StartNew(()=>GetList(string.Format(baseUrl, index))));
+            Task.Factory.ContinueWhenAll(queue.ToArray(), task => { Console.WriteLine("Next {0} Done",index); });
         }
    } 
 }
