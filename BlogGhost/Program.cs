@@ -12,7 +12,7 @@ namespace BlogGhost
         static void Main()
         {
             BlogCSDN csdn = new BlogCSDN();
-            csdn.Next(1);
+            csdn.Next(2);
 
             Console.ReadLine();
         }

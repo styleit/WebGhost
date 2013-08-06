@@ -17,57 +17,24 @@ namespace BlogGhost
         private string baseUrl = "http://blog.csdn.net/newest.html?page={0}";
         private Regex regIndex = new Regex("<div class=\"blog_list\">[\\d\\D]*?<h1>[\\d\\D]*?<a name[\\d\\D]*?href=\"(.*?)\"[\\d\\D]*?>(.*?)</a>");
         private Regex regContent = new Regex("id=\"article_content\"[\\d\\D]*?>([\\d\\D]*?)<div class=\"share_buttons\"");
-        private Regex regImage = new Regex("<img src=\"(.*?)\"");
+        private Regex regImage = new Regex("<img.*?src=\"(.*?)\"");
         private Regex regCode = new Regex ("<pre name=\"code\" class=\"(.*?)\">([\\d\\D]*?)</pre>");
         private Queue<BlogIndexItem> indexQueue = new Queue<BlogIndexItem>();
 
-        /*
-        private async Task<string> GetURLContentsAsync(string url)
-        {
-            // The downloaded resource ends up in the variable named content.
-            string content = string.Empty;
-
-            // Initialize an HttpWebRequest for the current URL.
-            var webReq = (HttpWebRequest)WebRequest.Create(url);
-
-            // Send the request to the Internet resource and wait for
-            // the response.
-            Task<WebResponse> responseTask = webReq.GetResponseAsync();
-
-            using (WebResponse response = await responseTask)
-            {
-                // Get the data stream that is associated with the specified URL.
-                using (Stream responseStream = response.GetResponseStream())
-                {
-                    StreamReader reader = new StreamReader(responseStream);
-                    content = await reader.ReadToEndAsync();
-                }
-            }
-            // Return the result as a byte array.
-            return content;
-        }
-        */
-
         private string GetURLContentsAsync(string url)
         {
-            // The downloaded resource ends up in the variable named content.
             string content = string.Empty;
 
-            // Initialize an HttpWebRequest for the current URL.
             var webReq = (HttpWebRequest)WebRequest.Create(url);
 
-            // Send the request to the Internet resource and wait for
-            // the response.
             using (WebResponse response = webReq.GetResponse())
             {
-                // Get the data stream that is associated with the specified URL.
                 using (Stream responseStream = response.GetResponseStream())
                 {
                     StreamReader reader = new StreamReader(responseStream);
                     content = reader.ReadToEnd();
                 }
             }
-            // Return the result as a byte array.
             return content;
         }
 
@@ -81,7 +48,9 @@ namespace BlogGhost
                 Console.WriteLine("Enqueue one item.");
                 indexQueue.Enqueue(new BlogIndexItem(item.Groups[2].Value, item.Groups[1].Value));
             }
-            CheckItem();
+            Task checkItemTask = CheckItem();
+            checkItemTask.Start();
+            checkItemTask.Wait();
 
             Console.WriteLine("GetList done in fun.");
         }
@@ -91,7 +60,7 @@ namespace BlogGhost
             return false;
         }
 
-        private void CheckItem()
+        private Task CheckItem()
         {
             Console.WriteLine("CheckItem start in fun.");
             Task checkItemTask = new Task(() => {
@@ -108,19 +77,28 @@ namespace BlogGhost
             });
 
             checkItemTask.ContinueWith(task => { Console.WriteLine("CheckItem done in fun."); });
-            checkItemTask.Start();
-            
+            return checkItemTask;
         }
 
         private void processContent(BlogIndexItem item)
         {
+            string content = string.Empty;
             Console.WriteLine("Start to processing {0}.", item.URL);
-            string content = GetURLContentsAsync(item.URL);
+            Task<string> getContentTask = new Task<string>(() =>
+            {
+                string _content = string.Empty;
+                _content = GetURLContentsAsync(item.URL);
+                return _content;
+            });
+            getContentTask.Start();
+            getContentTask.Wait();
+            content = getContentTask.Result;
+
             Match artical = regContent.Match(content);
             string result = artical.Groups[1].Value;
 
             List<ContentSem> markList = new List<ContentSem>();
-            
+
             MatchCollection mc = regImage.Matches(result);
             foreach (Match imgItem in mc)
             {
@@ -138,24 +116,74 @@ namespace BlogGhost
                 markList.Add(cs);
             }
 
+            StringBuilder buffer = new StringBuilder();
             if (markList.Count > 0)
             {
-                markList.OrderBy(c => c.Index);
+                IEnumerable<ContentSem> orderList = markList.OrderBy(c => c.Index);
+                Task processImgCodeTask = ProcessImageCode(orderList);
+                processImgCodeTask.Start();
+                processImgCodeTask.Wait();
+                
+                int index = 0;
+                foreach (var listItem in orderList)
+                {
+                    buffer.Append(result.Substring(index, listItem.Index - index));
+                    buffer.Append(listItem.Content);
+                    index = listItem.Index + listItem.Length;
+                }
+                buffer.Append(result.Substring(index, result.Length - index));
+            }
+            else
+            {
+                buffer.Append(result);
+            }
 
+            string PostContent = buffer.ToString();
+            SavePost(item.Title, PostContent);
+            Console.WriteLine("Processing {0} Done.", item.URL);
+            
+        }
+
+        private string filterTitle(string title)
+        {
+            char[] filter = new char[] { '.','*','?','/','\\','|',':','\"','>','<','\''};
+            foreach (char item in filter)
+            {
+                title = title.Replace(item.ToString(),"");
+            }
+            return title;
+        }
+
+        private void SavePost(string title, string content)
+        {
+            title = filterTitle(title);
+            StreamWriter sw = new StreamWriter(title+".html");
+            sw.Write(content);
+            sw.Close();
+        }
+
+        private Task ProcessImageCode(IEnumerable<ContentSem> markList)
+        {
+            
+            
+            Queue<Task> queue = new Queue<Task>();
+            Task processImgCodeTask = new Task(() =>
+            {
                 foreach (ContentSem semItem in markList)
                 {
                     if (semItem.Type == "img")
                     {
-                       processImage(semItem);
+                        queue.Enqueue(Task.Factory.StartNew(() => { processImage(semItem); }, TaskCreationOptions.AttachedToParent));
                     }
                     if (semItem.Type == "code")
                     {
-                        processCode(semItem);
+                        queue.Enqueue(Task.Factory.StartNew(() => { processCode(semItem); }, TaskCreationOptions.AttachedToParent));
                     }
                 }
-            }
+                Task.Factory.ContinueWhenAll(queue.ToArray(), task => { Console.WriteLine("Meta files Done"); });
+            });
 
-            Console.WriteLine("Processing {0} Done.", item.URL);
+            return processImgCodeTask;
         }
 
         private void ExecuteCmd(string command)
@@ -175,6 +203,7 @@ namespace BlogGhost
             p.WaitForExit();
             p.Close();
         }
+
         private void processImage(ContentSem sem)
         {
             string uploadImgCMDPattern = "netdisk /e \"upload {0} \\app\\PublicFiles\\img-51make\\{1}\\{2}\"";
@@ -187,21 +216,19 @@ namespace BlogGhost
 
             int fileNameIndex = sem.Content.Split('/').Length;
             filename = sem.Content.Split('/')[fileNameIndex - 1];
-            //if (sem.Content.Split('/')[0] == "http://img.blog.csdn.net/")
             if (sem.Content.StartsWith("http://img.blog.csdn.net/"))
             {
                 fileNameIndex = sem.Content.Split('/').Length;
                 filename = sem.Content.Split('/')[fileNameIndex - 1];
                 filename = filename + ".jpg";
             }
-            WebRequest wr = WebRequest.Create(sem.Content);
-            WebResponse response = wr.GetResponse();
-            Stream responseStream = response.GetResponseStream();
-
             if (File.Exists(filename))
             { }
             else
             {
+                WebRequest wr = WebRequest.Create(sem.Content);
+                WebResponse response = wr.GetResponse();
+                Stream responseStream = response.GetResponseStream();
                 Console.WriteLine("Will Save File : {0}", filename);
                 FileStream writer = new FileStream(filename, FileMode.OpenOrCreate, FileAccess.Write);
                 byte[] buffer = new byte[1024];
@@ -217,6 +244,9 @@ namespace BlogGhost
                 Console.WriteLine("Will execute command : {0}", cmd);
                 ExecuteCmd(cmd);
             }
+
+            string imageOnPost = "/{0}/{1}/{2}";
+            sem.Content = string.Format(imageOnPost, DateTime.Now.Year, DateTime.Now.Month, filename);
         }
 
         private void processCode(ContentSem sem)
@@ -226,15 +256,12 @@ namespace BlogGhost
             sem.Content = string.Format(codePatern, code.Groups[1].Value, code.Groups[2].Value, code.Groups[1].Value);
         }
 
-        public string GetContent(string url)
-        {
-            throw new NotImplementedException();
-        }
-
         public void Next(int index)
         {
-            GetList(string.Format(baseUrl, index));
-            Console.WriteLine("Done in Next");
+            Task getListTask = new Task(() => { GetList(string.Format(baseUrl, index)); });
+            getListTask.ContinueWith(task => { Console.WriteLine("Done in Next"); });
+            getListTask.Start();
+            getListTask.Wait();
         }
    } 
 }
