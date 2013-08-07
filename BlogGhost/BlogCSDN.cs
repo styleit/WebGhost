@@ -20,6 +20,7 @@ namespace BlogGhost
         private Regex regImage = new Regex("<img.*?src=\"(.*?)\"");
         private Regex regCode = new Regex ("<pre name=\"code\" class=\"(.*?)\">([\\d\\D]*?)</pre>");
         private Queue<BlogIndexItem> indexQueue = new Queue<BlogIndexItem>();
+        private ProducerConsumerQueue<BlogIndexItem> CSDNBlogPosts = new ProducerConsumerQueue<BlogIndexItem>();
 
         private string GetURLContentsAsync(string url)
         {
@@ -53,6 +54,18 @@ namespace BlogGhost
             checkItemTask.Wait();
 
             Console.WriteLine("GetList done in fun.");
+        }
+
+        private void GetPostList(string url)
+        {
+ 
+        }
+        private void PostProducter(Queue<BlogIndexItem> queue)
+        {
+            while (true)
+            {
+                
+            }
         }
 
         private bool CheckHistory(BlogIndexItem item)
